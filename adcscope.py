@@ -36,6 +36,7 @@ Connection + wire-format handling is modelled on the legacy scope-client.py refe
   python -m adcscope                 # discover via mDNS + nat.env, pick in the UI
   python -m adcscope -m fry          # auto-pick a discovered device by hostname
   python -m adcscope --ip 192.168.4.2 [--port 24]
+  python -m adcscope --load data/fry/2000w-inverter-midday-20260606T131106Z   # offline, no device
 
 Devices mDNS cannot reach (behind a NAT router, say) are supplied by whatever discovery hooks
 the caller registered — see discover.py and contrib/fugu_nat.py for a worked example.
@@ -538,7 +539,8 @@ class Controls(EdgeWindow):
             if clicked:
                 s.select(c)
         if not shown:
-            imgui.text_disabled("  (discovering...)")
+            imgui.text_disabled("  (offline - capture loaded)" if s.discovery is None
+                                else "  (discovering...)")
         if imgui.small_button("Rescan"):
             s.request_rescan()
         imgui.same_line()
@@ -945,6 +947,8 @@ def main():
     ap.add_argument("-m", "--match", help="connect only to a device whose hostname contains this")
     ap.add_argument("--rate", type=float, default=2000, help="fallback sample rate Hz")
     ap.add_argument("--median", action="store_true", help="5-tap median spike filter")
+    ap.add_argument("--load", metavar="DIR",
+                    help="open a saved capture directory instead of connecting to a device")
     ap.add_argument("--discover-interval", type=float, default=3.0,
                     help="seconds between background device-discovery sweeps")
     args = ap.parse_args()
@@ -953,8 +957,14 @@ def main():
     load_settings(state, SETTINGS_PATH)
     atexit.register(save_settings, state, SETTINGS_PATH)
     dec = Decoder(state)
-    threading.Thread(target=receive_loop, args=(state, dec), daemon=True).start()
-    if not args.ip:
+    if args.load:                         # offline: freeze on a capture, start no network threads
+        load_capture(state, args.load)
+        state.status = f"capture: {os.path.basename(os.path.normpath(args.load))}"
+        # no autofit here: load_capture applies the capture's own view.json (per-channel scale,
+        # offset, coupling), and autofit would flatten that curated separation onto zero.
+    else:
+        threading.Thread(target=receive_loop, args=(state, dec), daemon=True).start()
+    if not args.ip and not args.load:
         state.discovery = ScopeDiscovery()
         threading.Thread(target=discovery_loop, args=(state,), daemon=True).start()
 

@@ -10,6 +10,12 @@ Extracted from [fugu-mppt-firmware](https://github.com/fl4p/fugu-mppt-firmware),
 `etc/scope_client`. Nothing here is specific to that firmware or to an ESP32 — the wire protocol is
 [PROTOCOL.md](PROTOCOL.md), and any device that speaks it works.
 
+![adcscope showing a saved capture](doc/screenshot.png)
+
+*A 2 kW inverter load on a solar charge controller: 100 Hz ripple on the output current (magenta)
+and voltage (green), with the DC-link and temperature channels above and below. Reproduce it with
+`python adcscope.py --load data/fry/2000w-inverter-midday-20260606T131106Z`.*
+
 ## Why not an existing scope app
 
 Surveyed before writing this — see [doc/prior-art.md](doc/prior-art.md). ngscopeclient is
@@ -34,6 +40,7 @@ stack will not install.
 python adcscope.py                        # discover via mDNS, pick in the UI
 python adcscope.py -m fry                 # auto-pick a discovered device by hostname substring
 python adcscope.py --ip 192.168.4.2 [--port 24]
+python adcscope.py --load data/fry/<capture>    # open a saved capture, no device needed
 ```
 
 Sliders set the time window and vertical range; each channel has its own gain, offset and DC/AC
