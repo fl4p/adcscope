@@ -6,15 +6,16 @@ What a device actually sends today, as implemented in `Scope` (fugu-mppt-firmwar
 `src/tele/scope.h`) and decoded by `adcscope.py`. Where the firmware's own comments disagree with
 its code, this file follows the code and says so.
 
-The format has one goal: get a 12-bit ADC sample onto a socket in 2 bytes, from a real-time loop,
-without allocating. Everything absent from it — timestamps, framing, sequence numbers, checksums,
-compression — is absent on purpose, because the transport is TCP on a LAN and the cost was judged
-against a per-sample budget.
+The format gets a 12-bit ADC sample onto a socket in 2 bytes from a real-time loop, without
+allocating. Timestamps, framing, sequence numbers, checksums and compression are all absent; the
+code does not record whether each was a considered trade or simply never needed, so read their
+absence as a fact about the wire, not as a rationale.
 
 ## Transport
 
-TCP, default port **24**, `TCP_NODELAY`, **one client at a time**. A second connection is not
-refused; it simply is not accepted until the first drops.
+TCP, default port **24**, `TCP_NODELAY`, **one client at a time**: the application accepts a new
+client only once the current one is gone. What the listener's backlog does with a second
+connection in the meantime is not specified here — it may sit queued rather than be refused.
 
 Devices advertise over mDNS as `_scope._tcp`. The advert carries the address, port and hostname,
 and is the only discovery mechanism that is part of the protocol.
@@ -77,9 +78,9 @@ data rather than as a wider sample:
 
 * The encoder has no path to them. `addSample16()` is commented out; `addSample12()` is the only
   writer.
-* The firmware's own `ScopeDecoder` throws `range_error("not impl")` on the 32-bit form, and its
-  16-bit branch reads from the residual buffer `buf` rather than the current position `start` — it
-  has never run.
+* The firmware's own `ScopeDecoder` throws `range_error("not impl")` on the 32-bit form. Its
+  16-bit branch exists but reads from the residual buffer `buf` rather than the current position
+  `start`, so it would decode the wrong bytes if anything ever reached it.
 * `adcscope.py` stops at the first sample with bit 0 set and discards the rest of the chunk.
 
 Two traps for anyone implementing them later:
@@ -90,6 +91,18 @@ Two traps for anyone implementing them later:
   desynchronise the stream permanently, since there is no framing to resync on.
 * `sizeof(Data32Ch4)` is 5, which does match its comment.
 
+## Reading the stream
+
+**A TCP read is not a message.** The stream is 2-byte aligned but unframed, so a read can end
+mid-sample and the header can arrive split across reads, or coalesced with the samples behind it.
+A client must carry an odd trailing byte into the next read and must decode whatever follows
+`###ENDHEAD\n` in the same buffer. Dropping either resyncs onto the wrong byte boundary and, with
+no framing to recover on, produces plausible wrong values indefinitely rather than an error. The
+reference client got this wrong until 2026-09; `tests/test_decode.py` pins it.
+
+The header has no length prefix and no declared maximum. The reference client stops looking after
+4096 bytes to bound its buffer — a limit of the client, not of the protocol.
+
 ## Limits worth knowing
 
 * **8 channels, hard.** The channel id is 3 bits. `Scope::addChannel()` hands out ids by
@@ -97,14 +110,18 @@ Two traps for anyone implementing them later:
   9th channel silently aliases onto channel 0 — no error, plausible-looking data on the wrong
   trace. fugu registers up to 7 (five sensors, plus `ucTemp` and a filtered `vout_filt`), i.e. one
   short of the limit.
-* **Samples are dropped, not buffered, under backpressure.** The device holds two 2 KB buffers.
-  The producer fills one while the network task writes the other; if it fills its buffer and the
-  other is still unsent, the sample is discarded and a single `buffer over-flow, dropping sample`
-  warning is logged until the condition clears. A gap in the stream is therefore invisible to the
-  client — there is no sequence number to detect it, and it appears as a time-axis stretch.
+* **Samples are dropped once both buffers are full.** The device holds two 2 KB buffers; the
+  producer fills one while the network task writes the other. If it fills its buffer and the other
+  is still unsent, the sample is discarded and a single `buffer over-flow, dropping sample` warning
+  is logged until the condition clears. The loss is invisible to the client: nothing on the wire
+  marks it, and with no sequence number or per-sample timestamp there is no way to tell which
+  samples are missing, or that any are.
 * **No integrity check.** TCP's checksum is the only one. There is no CRC, and no way to
   distinguish a truncated sample at the end of a chunk from a valid one, which is why a client
   must buffer an odd trailing byte across reads.
+* **Values above 4095 truncate, not saturate.** `addSample12()` writes into a 12-bit field, so a
+  producer that rescales past full scale wraps to a small number rather than pinning at the top —
+  an overrange reads as an underrange.
 * **The value is not physical.** Producers rescale into 12 bits with whatever factor suits them
   (`vout_filt` is `vout / 60.0 * 2000.0`; the INA226 current channel is `abs(raw) / 3`). The
   protocol carries no scale factor, so converting a trace back to volts or amps requires knowing
@@ -113,4 +130,5 @@ Two traps for anyone implementing them later:
 ## Version
 
 There is no version field on the wire. "v1" names the format described here; a future revision
-would have to be negotiated by a new header key or a distinct mDNS service name.
+would need some out-of-band signal — a new header key and a distinct mDNS service name are the two
+obvious candidates, neither of which is implemented.

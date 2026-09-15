@@ -319,28 +319,56 @@ class ScopeState:
 # wire protocol decoder (12-bit packed samples + ###ScopeHead header)
 # ---------------------------------------------------------------------------
 class Decoder:
+    # A TCP read is not a message: the firmware's samples are a 2-byte-aligned stream with no
+    # framing, so a read can split a sample, and the header can arrive split or coalesced with the
+    # samples that follow it. Anything not consumable yet is carried to the next read — dropping it
+    # (as this did) resyncs the stream onto the wrong byte and plots plausible wrong values.
+    HEAD_SOF = b'###ScopeHead:'
+    HEAD_EOF = b'###ENDHEAD\n'
+    MAX_HEAD = 4096                     # bound the stash; a stream that never completes a header
+
     def __init__(self, state: ScopeState):
         self.s = state
+        self.resid = b''
+
+    def reset(self):
+        """Drop carried bytes. Call on a new connection — residue belongs to the old stream."""
+        self.resid = b''
+
+    def _parse_header(self, body: bytes):
+        for ent in body.decode('utf-8', 'replace').strip(' ,').split(','):
+            if not ent:
+                continue
+            if ent.startswith('@host='):
+                self.s.hostname = ent[6:]
+                continue
+            cid, rest = ent.split('$')
+            name, typrepr = rest.split('=')
+            self.s.add_channel(int(cid), name, typrepr[0], int(typrepr[1:]))
+        print("scope header:", [(c.cid, c.name, c.typ, c.bitlen)
+                                for c in self.s.channel_list()])
 
     def decode(self, ba: bytes, t: float):
         if self.s.frozen:                   # showing a loaded capture: ignore live samples
             return
-        if ba[:13] == b'###ScopeHead:' and b'###ENDHEAD\n' in ba[:256]:
-            body = ba[13:ba.index(b'###ENDHEAD\n')].decode('utf-8', 'replace')
-            for ent in body.strip(' ,').split(','):
-                if not ent:
-                    continue
-                if ent.startswith('@host='):
-                    self.s.hostname = ent[6:]
-                    continue
-                cid, rest = ent.split('$')
-                name, typrepr = rest.split('=')
-                self.s.add_channel(int(cid), name, typrepr[0], int(typrepr[1:]))
-            print("scope header:", [(c.cid, c.name, c.typ, c.bitlen)
-                                    for c in self.s.channel_list()])
+        if self.resid:
+            ba = self.resid + ba
+            self.resid = b''
+        if ba[:len(self.HEAD_SOF)] == self.HEAD_SOF:
+            end = ba.find(self.HEAD_EOF)
+            if end < 0:                     # header split across reads: wait for the rest
+                if len(ba) < self.MAX_HEAD:
+                    self.resid = ba
+                return
+            self._parse_header(ba[len(self.HEAD_SOF):end])
+            ba = ba[end + len(self.HEAD_EOF):]   # samples may be coalesced after the header
+        elif len(ba) < len(self.HEAD_SOF) and self.HEAD_SOF.startswith(ba):
+            self.resid = ba                 # could be the start of a header
             return
         chans = self.s.channels
         n = len(ba) & ~1                # whole 2-byte samples only
+        if n < len(ba):
+            self.resid = ba[n:]         # odd trailing byte belongs to the next read
         if n < 2:
             return
         raw = np.frombuffer(ba, dtype=np.uint8, count=n)
@@ -379,6 +407,7 @@ def serve_connection(state: ScopeState, dec: Decoder, target):
     state.connected = True
     state.status = f"connected {host}:{port}"
     state.clear_buffers()               # drop stale samples from any previous connection
+    dec.reset()                         # ...and any half-sample carried from the previous stream
     state.t0 = time.time()
     t_last = time.time()
     noted = False
@@ -911,7 +940,7 @@ def do_load(state: ScopeState):
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ip", help="device IP (skip mDNS/nat.env discovery)")
+    ap.add_argument("--ip", help="device IP (skip discovery entirely)")
     ap.add_argument("--port", type=int, default=24)
     ap.add_argument("-m", "--match", help="connect only to a device whose hostname contains this")
     ap.add_argument("--rate", type=float, default=2000, help="fallback sample rate Hz")

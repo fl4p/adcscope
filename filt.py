@@ -1,7 +1,11 @@
+import sys
+
 import pandas as pd
 from matplotlib import pyplot as plt
 
-s = pd.read_csv('iout.csv')['0']
+# CSV path is an argument: this used to be a hard-coded 'iout.csv' resolved against the working
+# directory, so it only ever loaded from one folder and broke as soon as it was run elsewhere.
+s = pd.read_csv(sys.argv[1] if len(sys.argv) > 1 else 'iout.csv')['0']
 
 def plot(s, **kwargs):
     s.plot(marker='.', drawstyle="steps-post", markersize=3, linewidth=1, **kwargs)

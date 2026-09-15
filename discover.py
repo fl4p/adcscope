@@ -22,26 +22,47 @@ _EXTRA_SOURCES = []
 _NAME_RESOLVERS = []
 
 
+def _register(registry, fn):
+    """Append unless this exact callable is already registered, so importing an adapter twice in
+    one process does not double it.
+
+    Identity only, deliberately. Matching on __qualname__ instead looks like it would also catch a
+    module imported under two spellings, but every lambda defined in one function shares a
+    qualname — so that rule silently DROPS genuinely different hooks. A module imported twice is
+    handled where it actually shows: extra_endpoints() deduplicates endpoints, and resolve_name()
+    returns on the first answer."""
+    if not any(got is fn for got in registry):
+        registry.append(fn)
+    return fn
+
+
 def register_endpoint_source(fn):
     """Register `fn() -> [(host, port)]` yielding scope endpoints mDNS cannot advertise."""
-    _EXTRA_SOURCES.append(fn)
-    return fn
+    return _register(_EXTRA_SOURCES, fn)
 
 
 def register_name_resolver(fn):
     """Register `fn(host, port) -> hostname | None` for endpoints with no mDNS advert."""
-    _NAME_RESOLVERS.append(fn)
-    return fn
+    return _register(_NAME_RESOLVERS, fn)
 
 
 def extra_endpoints():
-    """Union of every registered endpoint source; empty when none are registered."""
-    out = []
+    """Union of every registered endpoint source, deduplicated and order-preserving; empty when
+    none are registered. Two sources naming the same (host, port) — the same adapter imported
+    under two module spellings, say — must yield one candidate, otherwise one device looks like
+    two and single-device auto-connect never fires."""
+    out, seen = [], set()
     for fn in _EXTRA_SOURCES:
         try:
-            out.extend(fn() or ())
+            eps = fn() or ()
         except Exception as e:
-            print("endpoint source failed:", e)
+            print(f"endpoint source {getattr(fn, '__name__', fn)!r} failed:", e)
+            continue
+        for ep in eps:
+            ep = (ep[0], int(ep[1]))
+            if ep not in seen:
+                seen.add(ep)
+                out.append(ep)
     return out
 
 
@@ -52,8 +73,8 @@ def resolve_name(host, port):
             name = fn(host, port)
             if name:
                 return name
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"name resolver {getattr(fn, '__name__', fn)!r} failed for {host}:{port}:", e)
     return None
 
 

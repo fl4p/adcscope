@@ -25,7 +25,7 @@ python adcscope.py
 ```
 
 `fastplotlib`/`pygfx` (WGPU) drive the display; `zeroconf` does discovery. The legacy matplotlib
-reference client, `scope-client.py`, needs only numpy/pandas/matplotlib and is useful when the GPU
+reference client, `scope-client.py`, needs only numpy/pandas/matplotlib/scipy and is useful when the GPU
 stack will not install.
 
 ## Use
@@ -53,10 +53,11 @@ the sample rate in the filename and the capture time in the directory name.
 | `scope-client.py` | legacy matplotlib reference client |
 | `filt.py`, `plot_capture.py` | offline filtering and capture plotting |
 | `contrib/fugu_nat.py` | example discovery adapter: NAT-forwarded boards named from a telnet banner |
-| `tests/` | capture round-trip and device-selection tests; plain scripts, no pytest |
+| `anf.py`, `ewm.py` | adaptive/EWMA filters the legacy client constructs per channel |
+| `tests/` | wire decoder, discovery hooks, capture round-trip, device selection; plain scripts, no pytest |
 
 ```bash
-python tests/test_capture_io.py && python tests/test_device_select.py
+for t in tests/test_*.py; do python "$t" || break; done   # 42 tests, no network needed
 ```
 
 ## Discovery hooks

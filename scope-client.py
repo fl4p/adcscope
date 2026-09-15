@@ -141,7 +141,7 @@ class Channel:
         self.med = RunningMedian(5)
         self.notch50 = NotchIIR(451, 50 * 2, 20)
         self.notch60 = NotchIIR(451, 60 * 2, 20)
-        from adaptive_noise_filter import anf
+        import anf
         self.anf = anf.AdaptiveLengthFilter(5, 200, 0.2)
         self.ewma = EWMA(90)
         self.t_first = 0
