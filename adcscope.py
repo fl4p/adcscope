@@ -1,9 +1,9 @@
 """
-GPU oscilloscope client for the fugu MPPT firmware.
+GPU oscilloscope client for microcontroller ADCs.
 
-Connects to the firmware 'scope' service (TCP port 24, mDNS _scope._tcp), decodes the
-12-bit sample stream into a 100k-sample-per-channel ring buffer, and draws it like a
-real oscilloscope with fastplotlib (WGPU/pygfx).
+Connects to a device's scope service (TCP port 24, mDNS _scope._tcp; wire format in
+PROTOCOL.md), decodes the 12-bit sample stream into a 100k-sample-per-channel ring
+buffer, and draws it like a real oscilloscope with fastplotlib (WGPU/pygfx).
 
 Channels stream at different (and not exactly known) sample rates and arrive in TCP
 batches, so each channel tracks the wall-clock arrival time of its newest sample and
@@ -37,9 +37,8 @@ Connection + wire-format handling is modelled on the legacy scope-client.py refe
   python -m adcscope -m fry          # auto-pick a discovered device by hostname
   python -m adcscope --ip 192.168.4.2 [--port 24]
 
-NAT-routed boards (fry/flat) aren't mDNS-reachable; their scope endpoints are derived from the
-telnet endpoints in `etc/nat.env` ($NAT_TELNET): the router forwards telnet on 23x and scope on
-24x, so the scope port is the telnet port + 10.
+Devices mDNS cannot reach (behind a NAT router, say) are supplied by whatever discovery hooks
+the caller registered — see discover.py and contrib/fugu_nat.py for a worked example.
 """
 import argparse
 import atexit
